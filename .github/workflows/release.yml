@@ -1,0 +1,79 @@
+name: Releases
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: "Create new release"
+        required: true
+        type: boolean
+
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v1
+
+      - name: Get CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Get Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build FastDeploy
+        working-directory: ./python
+        run: |
+          export ENABLE_ORT_BACKEND=ON
+          export ENABLE_PADDLE_BACKEND=OFF
+          export ENABLE_OPENVINO_BACKEND=OFF
+          export ENABLE_VISION=ON
+          export ENABLE_TEXT=ON
+          python -m pip install wheel
+          python setup.py build
+          python setup.py bdist_wheel
+
+      - name: Get release version
+        id: version
+        run: |
+          echo "tag_name=$(cat VERSION_NUMBER)" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        id: create_release
+        uses: anzz1/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          release_name: release-${{ steps.version.outputs.tag_name }}
+
+      - name: Upload release
+        id: upload_release
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./python/dist/')) {
+              if (path.extname(file) === '.whl') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./python/dist/${file}`)
+                });
+              }
+            }
